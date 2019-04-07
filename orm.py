@@ -4,6 +4,8 @@ import gc
 import inspect
 import pymysql 
 
+#+ -- добавления/изменения
+
 # исключения
 class ValidationError(Exception):
     """..."""
@@ -110,10 +112,6 @@ class ModelMeta(type):
         new_namespace = {} # атрибуты будущего класса
         module = namespace.pop('__module__')
         new_namespace['__module__'] = module
-
-        classcell = namespace.pop('__classcell__', None)
-        if classcell is not None:
-            new_namespace['__classcell__'] = classcell
         
         new_class = super_new(mcs, name, bases, namespace)
         
@@ -167,18 +165,18 @@ class ModelMeta(type):
             raise AttributeError('Table have to has only one Manage()')
         return managers
 
+##
 class MetaManage(type):
     def __new__(mcs, name, bases, namespace):
         return super().__new__(mcs, name, bases, namespace)
-
-# 
+ 
 class Manage(metaclass=MetaManage):
     def __get__(self, instance, owner=None):
         return QuerySet(owner)
     
     def __delete__(self, instance):
         super().__delete__(instance)
-
+##
 # ...
 class QuerySet:
     _query_set = []
@@ -223,40 +221,32 @@ class Model(metaclass=ModelMeta):
         cursor = connection.cursor()
         ###
 
-        add_quotes = lambda x : "'" + x + "'" if (isinstance(x, str)) else x
         types = {IntField: 'INT(10)', FloatField: 'FLOAT(53,8)', StrField: 'CHAR(255)'}
-
         table_name = self.__class__.__dict__['Meta'].__dict__['table_name']
 
-        # для создания
-        string_list = []
-        # для вставок
-        value_list = []
-        # для table_name(...), ... - имена столбцов, надо, тк при другом запуске 
-        #  столбцы сформируются в другом порядке
-        another_list = []
+        prepared_statement_create = 'CREATE TABLE IF NOT EXISTS ' + table_name + ' ('
+        prepared_statement_insert_1 = 'INSERT INTO ' + table_name + ' ('
+        prepared_statement_insert_2 = ') VALUES ('
+        list_of_fvalues = []
         for field_name in self.__class__.__dict__['Meta'].__dict__['fields']:
-            value_list.append(getattr(self, field_name))
-            string_list.append('{0} {1}'.format(field_name, types[type(self.__class__.__dict__[field_name])],))
-            another_list.append('{0}'.format(field_name))
-        # превращаются в строки с разделителем ','
-        string_list = ','.join(string_list)
-        another_list = ','.join(another_list)
-        # print(string_list)
-        # print(another_list)
+            #
+            list_of_fvalues.append(getattr(self, field_name))
+            prepared_statement_create   += field_name + ' ' + types[type(self.__class__.__dict__[field_name])] + ','
+            prepared_statement_insert_1 += field_name + ','
+            prepared_statement_insert_2 += '%s,'
+            #
+        prepared_statement_create   = prepared_statement_create[:-1] + ');'
+        prepared_statement_insert = prepared_statement_insert_1[:-1] + prepared_statement_insert_2[:-1] + ');'
 
+        #+ вместо '...{}'.format() -- агрументы курсора
         cursor.execute(
-            'CREATE TABLE IF NOT EXISTS {0} ({1})'.format(
-                getattr(self,'Meta').__dict__['table_name'],
-                string_list
+            prepared_statement_create
             )
-        )
         
-        value_list = [str(add_quotes(x)) for x in value_list]
-        value_list = ','.join(value_list)
-        query_insert = "INSERT INTO {0} ({2}) VALUES ({1})".format(table_name,value_list, another_list)
-        print(query_insert)
-        cursor.execute(query_insert)
+        cursor.execute(
+            prepared_statement_insert,
+            list_of_fvalues
+            )
         connection.commit()
         connection.close() 
         gc.collect()
